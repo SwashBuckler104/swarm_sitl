@@ -8,27 +8,39 @@
 <!-- In ardupilot folder -->
 ./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --out=udp:127.0.0.1:14550 --console
 
+./Tools/autotest/sim_vehicle.py -v Copter --console --map --count 4 --auto-sysid --location CMAC --auto-offset-line 90,10
+
 <!-- In swarm_sitl folder -->
 python3 scripts/upload_missions.py --port 14550 --file missions/drone1.wpl
 
+# Kill Instances 
+pkill -f sim_vehicle.py
+pkill -f mavproxy.py
+pkill -f arducopter
 
-# Error decoding Tips
+# Steps :
+~/.config/ardupilot/locations.txt
+MySpot=12.934,77.61,30,0
+MySpot1=12.935,77.61,30,0
+MySpot2=12.936,77.61,30,0
+MySpot3=12.937,77.61,30,0
 
-Error : Got MISSION_ACK: TYPE_MISSION: INVALID_SEQUENCE
-The issue is likely this mav.mav.mission_count_send(...) running before the autopilot asks for the mission:
-This causes a mismatch in mission protocol sequence (you send mission count before the autopilot has even started the request cycle), and it ends in an INVALID_SEQUENCE error.
-Fix :
-// Wait for MISSION_REQUEST_LIST from the vehicle
-print("Waiting for MISSION_REQUEST_LIST...")
-msg = mav.recv_match(type='MISSION_REQUEST_LIST', blocking=True, timeout=10)
-if not msg:
-    print("Timeout waiting for MISSION_REQUEST_LIST")
-    return
+# Drone 1
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --instance 0 --sysid 1 -L MySpot   --out=udp:127.0.0.1:14550 --no-rebuild --no-mavproxy &
 
-// Send mission count after receiving MISSION_REQUEST_LIST
-count = len(missions)
-print(f"MISSION_REQUEST_LIST received, sending MISSION_COUNT = {count}")
-mav.mav.mission_count_send(mav.target_system, mav.target_component, count)
+# Drone 2
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --instance 1 --sysid 2 -L MySpot1  --out=udp:127.0.0.1:14551 --no-rebuild --no-mavproxy &
 
-// Also, set the target component explicitly, in case the autopilot expects 1:
-mav.target_component = 1
+# Drone 3
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --instance 2 --sysid 3 -L MySpot2  --out=udp:127.0.0.1:14552 --no-rebuild --no-mavproxy &
+
+# Drone 4
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --instance 3 --sysid 4 -L MySpot3  --out=udp:127.0.0.1:14553 --no-rebuild --no-mavproxy &
+
+mavproxy.py \
+  --master=udp:127.0.0.1:14550 \
+  --master=udp:127.0.0.1:14551 \
+  --master=udp:127.0.0.1:14552 \
+  --master=udp:127.0.0.1:14553 \
+  --out=udp:127.0.0.1:14554 \
+  --map

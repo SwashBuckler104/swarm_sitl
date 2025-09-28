@@ -1,91 +1,102 @@
 #!/usr/bin/env python3
-"""
-Usage: python3 upload_mission.py --port 14550 --file missions/drone1.wpl
-Uploads a QGC WPL file to the connected vehicle via pymavlink mission protocol.
-"""
+import time, sys
+from pymavlink import mavutil, mavwp
 
-import argparse
-from pymavlink import mavutil
+# Choose one of these based on how SITL is launched:
+# SITL_CONNECTION = "tcp:127.0.0.1:5760"      # if sim_vehicle --no-mavproxy (default TCP server)
+SITL_CONNECTION = "udp:127.0.0.1:14550"   # if using MAVProxy hub and a dedicated output for the script
+
+WPL_FILE = "missions/drone1_takeoff.wpl"    # or missions/drone1.wpl if using guided takeoff from QGC
+ITEM_TIMEOUT_S = 2.0
+MAX_RETRIES = 5
+
+def wait_heartbeat(master, timeout=10):
+    if master.wait_heartbeat(timeout=timeout) is None:
+        raise TimeoutError("No heartbeat from vehicle")
+    print(f"Heartbeat OK: sys={master.target_system} comp={master.target_component}")
+
+def wait_home_or_position(master, timeout=30):
+    t0 = time.time()
+    got_home = False
+    have_pos = False
+    try:
+        master.mav.request_data_stream_send(master.target_system, master.target_component,
+                                            mavutil.mavlink.MAV_DATA_STREAM_POSITION, 4, 1)
+    except Exception:
+        pass
+    while time.time() - t0 < timeout:
+        msg = master.recv_match(type=['HOME_POSITION','GPS_RAW_INT','EKF_STATUS_REPORT','STATUSTEXT'],
+                                blocking=True, timeout=1)
+        if not msg:
+            continue
+        t = msg.get_type()
+        if t == 'HOME_POSITION':
+            got_home = True
+            print("HOME_POSITION received")
+        elif t == 'GPS_RAW_INT':
+            if getattr(msg, 'fix_type', 0) >= 3:
+                have_pos = True
+        elif t == 'EKF_STATUS_REPORT':
+            if getattr(msg, 'flags', 0) != 0:
+                have_pos = True
+        elif t == 'STATUSTEXT':
+            print(msg)
+        if got_home or have_pos:
+            print("Ready to upload mission")
+            return
+    print("Proceeding without full readiness (timeout)")
+
+def upload_mission(master, path):
+    loader = mavwp.MAVWPLoader()
+    count = loader.load(path)
+    if count <= 0:
+        raise RuntimeError("Mission file has zero items")
+    print(f"Loaded mission: {count} items from {path}")
+
+    master.waypoint_clear_all_send()
+    time.sleep(0.2)
+    master.waypoint_count_send(count)
+
+    retries = 0
+    while True:
+        msg = master.recv_match(type=['MISSION_REQUEST','MISSION_REQUEST_INT','MISSION_ACK'],
+                                blocking=True, timeout=ITEM_TIMEOUT_S)
+        if msg is None:
+            if retries >= MAX_RETRIES:
+                raise TimeoutError("Mission upload timeout")
+            retries += 1
+            print(f"Timeout waiting for request/ack, retry {retries}/{MAX_RETRIES}")
+            master.waypoint_count_send(count)
+            continue
+
+        m = msg.to_dict()
+        if m['mavpackettype'] == 'MISSION_ACK':
+            result = m.get('type')
+            print(f"Got MISSION_ACK type={result}")
+            if result == mavutil.mavlink.MAV_MISSION_ACCEPTED:
+                print("Mission upload successful")
+                return
+            raise RuntimeError(f"Mission upload failed with ACK type={result}")
+
+        seq = m.get('seq')
+        if seq is None or not (0 <= seq < count):
+            raise RuntimeError(f"Bad MISSION_REQUEST: {m}")
+
+        master.mav.send(loader.wp(seq))
+        print(f"Sent waypoint {seq}/{count-1}")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', required=True, help='UDP port to connect (e.g. 14550)')
-    parser.add_argument('--file', required=True, help='WPL file to upload')
-    args = parser.parse_args()
+    master = mavutil.mavlink_connection(SITL_CONNECTION)
+    wait_heartbeat(master)
+    wait_home_or_position(master, timeout=30)
+    upload_mission(master, WPL_FILE)
+    print("Done. Use QGC to arm and fly the mission.")
 
-    # Parse WPL mission file
-    missions = []
-    with open(args.file) as f:
-        header = f.readline()  # skip header line
-        for line in f:
-            if not line.strip():
-                continue
-            parts = line.strip().split('\t')
-            seq = int(parts[0])
-            current = int(parts[1])
-            frame = int(parts[2])
-            command = int(parts[3])
-            p1 = float(parts[4])
-            p2 = float(parts[5])
-            p3 = float(parts[6])
-            p4 = float(parts[7])
-            x = float(parts[8])
-            y = float(parts[9])
-            z = float(parts[10])
-            auto = int(parts[11]) if len(parts) > 11 else 1
-
-            missions.append({
-                'seq': seq, 'frame': frame, 'command': command,
-                'p1': p1, 'p2': p2, 'p3': p3, 'p4': p4,
-                'x': x, 'y': y, 'z': z, 'auto': auto
-            })
-
-    print(f'Connecting to udp:127.0.0.1:{args.port}')
-    mav = mavutil.mavlink_connection(f'udp:127.0.0.1:{args.port}')
-
-    print('Waiting for heartbeat...')
-    mav.wait_heartbeat()
-    print(f'Heartbeat from system {mav.target_system}, component {mav.target_component}')
-
-    # Send mission count
-    count = len(missions)
-    print(f'Sending MISSION_COUNT = {count}')
-    mav.mav.mission_count_send(mav.target_system, mav.target_component, count)
-
-    # Serve requests from autopilot to upload mission items
-    while True:
-        msg = mav.recv_match(type=['MISSION_REQUEST', 'MISSION_ACK'], blocking=True, timeout=10)
-        if not msg:
-            print('Timeout waiting for mission request/ack')
-            break
-
-        msg_type = msg.get_type()
-        if msg_type == 'MISSION_REQUEST':
-            seq = msg.seq
-            print(f'MISSION_REQUEST for seq {seq}')
-            wp = missions[seq]
-            # mav.mav.mission_item_send(
-            #     mav.target_system, mav.target_component,
-            #     seq,
-            #     wp['frame'], wp['command'], 0, wp['auto'],
-            #     wp['p1'], wp['p2'], wp['p3'], wp['p4'],
-            #     wp['x'], wp['y'], wp['z']
-            # )
-            mav.mav.mission_item_int_send(mav.target_system, mav.target_component,
-                seq,
-                wp['frame'], wp['command'], 0, wp['auto'],
-                wp['p1'], wp['p2'], wp['p3'], wp['p4'],
-                int(wp['x'] * 1e7),  # latitude in degrees * 1e7 (int32)
-                int(wp['y'] * 1e7),  # longitude in degrees * 1e7 (int32)
-                wp['z']
-                )
-            
-            print(f'Sent mission item {seq}')
-        elif msg_type == 'MISSION_ACK':
-            print('MISSION_ACK received, mission upload complete')
-            break
-
-    print('Done')
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        sys.exit(1)
