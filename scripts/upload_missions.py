@@ -1,102 +1,84 @@
 #!/usr/bin/env python3
-import time, sys
-from pymavlink import mavutil, mavwp
+import asyncio
+from mavsdk import System
+from mavsdk import mission_raw
 
-# Choose one of these based on how SITL is launched:
-# SITL_CONNECTION = "tcp:127.0.0.1:5760"      # if sim_vehicle --no-mavproxy (default TCP server)
-SITL_CONNECTION = "udp:127.0.0.1:14550"   # if using MAVProxy hub and a dedicated output for the script
+WPL_PATH = "missions/drone1.wpl"
+SYSTEM_ADDRESS = "udpin://127.0.0.1:14550"  # ArduPilot SITL default
 
-WPL_FILE = "missions/drone1_takeoff.wpl"    # or missions/drone1.wpl if using guided takeoff from QGC
-ITEM_TIMEOUT_S = 2.0
-MAX_RETRIES = 5
 
-def wait_heartbeat(master, timeout=10):
-    if master.wait_heartbeat(timeout=timeout) is None:
-        raise TimeoutError("No heartbeat from vehicle")
-    print(f"Heartbeat OK: sys={master.target_system} comp={master.target_component}")
+def load_wpl_as_raw_items(path):
+    from mavsdk import mission_raw
+    items = []
+    with open(path, "r") as f:
+        lines = [l.strip() for l in f if l.strip()]
+    if not lines or not lines[0].upper().startswith("QGC WPL"):
+        raise RuntimeError("Invalid WPL header (expected 'QGC WPL 110')")
+    for line in lines[1:]:
+        # Accept any whitespace (tabs or spaces)
+        parts = line.split()
+        if len(parts) < 12:
+            raise RuntimeError(f"Malformed WPL line: {line}")
+        seq = int(parts[0])
+        current = int(parts[1])
+        frame = int(parts[2])
+        cmd = int(parts[3])
+        p1 = float(parts[4]); p2 = float(parts[5]); p3 = float(parts[6]); p4 = float(parts[7])
+        lat = float(parts[8]); lon = float(parts[9]); alt = float(parts[10])
+        autocontinue = int(parts[11])
 
-def wait_home_or_position(master, timeout=30):
-    t0 = time.time()
-    got_home = False
-    have_pos = False
-    try:
-        master.mav.request_data_stream_send(master.target_system, master.target_component,
-                                            mavutil.mavlink.MAV_DATA_STREAM_POSITION, 4, 1)
-    except Exception:
-        pass
-    while time.time() - t0 < timeout:
-        msg = master.recv_match(type=['HOME_POSITION','GPS_RAW_INT','EKF_STATUS_REPORT','STATUSTEXT'],
-                                blocking=True, timeout=1)
-        if not msg:
-            continue
-        t = msg.get_type()
-        if t == 'HOME_POSITION':
-            got_home = True
-            print("HOME_POSITION received")
-        elif t == 'GPS_RAW_INT':
-            if getattr(msg, 'fix_type', 0) >= 3:
-                have_pos = True
-        elif t == 'EKF_STATUS_REPORT':
-            if getattr(msg, 'flags', 0) != 0:
-                have_pos = True
-        elif t == 'STATUSTEXT':
-            print(msg)
-        if got_home or have_pos:
-            print("Ready to upload mission")
+        # ArduPilot prefers ITEM_INT semantics; ensure frame is an INT-capable frame if needed
+        # Common: 3 == MAV_FRAME_GLOBAL_RELATIVE_ALT (works fine with INT items)
+        # Lat/lon scaled by 1e7 for INT
+        items.append(mission_raw.MissionItem(
+            seq,
+            frame,
+            cmd,
+            current,
+            autocontinue,
+            p1, p2, p3, p4,
+            int(lat * 1e7),
+            int(lon * 1e7),
+            float(alt),
+            0  # MAV_MISSION_TYPE_MISSION
+        ))
+    return items
+
+async def connect_vehicle():
+    drone = System()
+    await drone.connect(system_address=SYSTEM_ADDRESS)
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            print("-- Connected")
+            return drone
+    raise RuntimeError("Not connected")
+
+async def wait_ready(drone):
+    # Wait for global position and home position like QGC before arming
+    async for health in drone.telemetry.health():
+        if health.is_global_position_ok and health.is_home_position_ok:
+            print("-- Global position and home OK")
             return
-    print("Proceeding without full readiness (timeout)")
 
-def upload_mission(master, path):
-    loader = mavwp.MAVWPLoader()
-    count = loader.load(path)
-    if count <= 0:
-        raise RuntimeError("Mission file has zero items")
-    print(f"Loaded mission: {count} items from {path}")
+async def main():
+    drone = await connect_vehicle()
+    # Build mission items from WPL
+    items = load_wpl_as_raw_items(WPL_PATH)
+    if not items:
+        raise RuntimeError("No mission items loaded")
+    print(f"-- Uploading mission with {len(items)} items")
+    await drone.mission_raw.upload_mission(items)
+    print("-- Mission uploaded")
 
-    master.waypoint_clear_all_send()
-    time.sleep(0.2)
-    master.waypoint_count_send(count)
+    # Ensure readiness similar to QGC
+    await wait_ready(drone)
 
-    retries = 0
-    while True:
-        msg = master.recv_match(type=['MISSION_REQUEST','MISSION_REQUEST_INT','MISSION_ACK'],
-                                blocking=True, timeout=ITEM_TIMEOUT_S)
-        if msg is None:
-            if retries >= MAX_RETRIES:
-                raise TimeoutError("Mission upload timeout")
-            retries += 1
-            print(f"Timeout waiting for request/ack, retry {retries}/{MAX_RETRIES}")
-            master.waypoint_count_send(count)
-            continue
-
-        m = msg.to_dict()
-        if m['mavpackettype'] == 'MISSION_ACK':
-            result = m.get('type')
-            print(f"Got MISSION_ACK type={result}")
-            if result == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-                print("Mission upload successful")
-                return
-            raise RuntimeError(f"Mission upload failed with ACK type={result}")
-
-        seq = m.get('seq')
-        if seq is None or not (0 <= seq < count):
-            raise RuntimeError(f"Bad MISSION_REQUEST: {m}")
-
-        master.mav.send(loader.wp(seq))
-        print(f"Sent waypoint {seq}/{count-1}")
-
-def main():
-    master = mavutil.mavlink_connection(SITL_CONNECTION)
-    wait_heartbeat(master)
-    wait_home_or_position(master, timeout=30)
-    upload_mission(master, WPL_FILE)
-    print("Done. Use QGC to arm and fly the mission.")
+    # Arm and start mission
+    print("-- Arming")
+    await drone.action.arm()
+    print("-- Starting mission")
+    await drone.mission_raw.start_mission()
+    print("-- Mission started")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(0)
-    except Exception as e:
-        print(f"Fatal error: {e}")
-        sys.exit(1)
+    asyncio.run(main())
