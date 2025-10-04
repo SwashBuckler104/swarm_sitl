@@ -15,3 +15,12 @@ uv run ap-sitl-swarm -n 4 \
      --param RC7_OPTION=0 \
     /home/swashbuckler/ardupilot/build/sitl/bin/arducopter
 ```
+
+```bash
+./Tools/autotest/sim_vehicle.py -v ArduCopter --sysid 1 --out=udp:127.0.0.1:14550 --console
+
+
+
+
+
+```
