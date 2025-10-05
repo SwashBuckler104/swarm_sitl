@@ -21,6 +21,19 @@ uv run ap-sitl-swarm -n 4 \
 
 
 
+# cmd that send info on two ports, can directly be run on user terminal,, Hell yeah fkiing worksssss(Note keep the ports 10 units apart)
 
+# Instance 1
+sim_vehicle.py -v ArduCopter --sysid 1 -I 0 --out udp:127.0.0.1:14550 --out udp:127.0.0.1:14551
 
+# Instance 2
+sim_vehicle.py -v ArduCopter --sysid 2 -I 1 --out udp:127.0.0.1:14560 --out udp:127.0.0.1:14561
+
+# Instance 3
+sim_vehicle.py -v ArduCopter --sysid 3 -I 2 --out udp:127.0.0.1:14570 --out udp:127.0.0.1:14571
+
+# Instance 4
+sim_vehicle.py -v ArduCopter --sysid 4 -I 3 --out udp:127.0.0.1:14580 --out udp:127.0.0.1:14581
+
+# Worksssssss!!!!!! swarm_follower.py
 ```
