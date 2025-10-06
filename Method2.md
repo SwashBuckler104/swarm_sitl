@@ -9,6 +9,17 @@ uv run ap-sitl-swarm -n 1 \
   /home/swashbuckler/ardupilot/build/sitl/bin/arducopter
 ```
 
+# Kill Instances 
+```bash
+pkill -f sim_vehicle.py
+pkill -f mavproxy.py
+pkill -f arducopter
+```
+### Parameters Start cmd 
+```bash
+./Tools/autotest/sim_vehicle.py -v ArduCopter --map --console
+```
+
 ### To launch 4 sitl instances -- Success
 ```bash
 uv run ap-sitl-swarm -n 4 \
@@ -35,5 +46,5 @@ sim_vehicle.py -v ArduCopter --sysid 3 -I 2 --out udp:127.0.0.1:14570 --out udp:
 # Instance 4
 sim_vehicle.py -v ArduCopter --sysid 4 -I 3 --out udp:127.0.0.1:14580 --out udp:127.0.0.1:14581
 
-# Worksssssss!!!!!! swarm_follower.py
+# Worksssssss!!!!!! swarm_follow.py
 ```
