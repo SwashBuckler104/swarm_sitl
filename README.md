@@ -25,8 +25,6 @@ The system enables rapid prototyping and testing of swarm coordination, path fol
 - **PyMAVLink** 
 
 ---
-```bash
-```
 
 ## 📝 Execution Steps
 **Step 1: Launch 4 ArduPilot SITL Instances**
