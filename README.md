@@ -1,33 +1,123 @@
 # Swarm SITL Simulation
 
-This project demonstrates a swarm drone simulation using ArduPilot SITL and PyMAVLink, where one leader drone follows a predefined mission path (.KML), and three follower drones autonomously mirror the leader’s movements.  
-The setup integrates with QGroundControl (QGC) for visualization, mission upload, and manual control.  
+A multi-drone swarm simulation using ArduPilot SITL and PyMAVLink. One leader drone follows a predefined KML mission path; three follower drones autonomously mirror its movements via MAVLink.
 
-The system enables rapid prototyping and testing of swarm coordination, path following, and MAVLink-based communication — all in a simulated environment.
+Integrates with QGroundControl (QGC) for mission planning and visualization.
 
 ---
 
-## 🚀 Features
+## Features
 
 - Multi-drone SITL setup (1 Leader + 3 Followers)
-- KML-to-Waypoint (.WPL) mission conversion
-- QGroundControl integration for mission planning
+- KML-to-Waypoint (.txt) mission conversion
+- QGroundControl integration for mission planning and upload
 - PyMAVLink-based swarm coordination
+- Automated mission upload, follower arming, takeoff, and swarm launch
 - Fully local simulation — no real drones required
 
 ---
 
-## ⚙️ Dependencies
+## Dependencies
 
-- **Python 3.8+**
-- **ArduPilot SITL**
-- **QGroundControl (QGC)**
-- **PyMAVLink** 
+- Python 3.8+
+- ArduPilot SITL
+- QGroundControl (QGC)
+- PyMAVLink (`pip install pymavlink`)
+- lxml (`pip install lxml`)
 
 ---
 
-## 📝 Execution Steps
-**Step 1: Launch 4 ArduPilot SITL Instances**
+## Installing ArduPilot
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-pip
+
+# Clone ArduPilot
+git clone --recurse-submodules https://github.com/ArduPilot/ardupilot.git
+cd ardupilot
+
+# Install dependencies
+Tools/environment_install/install-prereqs-ubuntu.sh -y
+
+# Reload environment (run in every new terminal)
+. ~/.profile
+```
+
+**Pin to a stable release (recommended):**
+```bash
+git fetch --all --tags
+git checkout Copter-4.6.3
+git submodule update --init --recursive
+# Should show: HEAD detached at Copter-4.6.3
+```
+
+**Build and verify SITL:**
+```bash
+# From ardupilot/ root
+./waf configure --board sitl
+./waf copter
+
+# Quick test (single instance)
+./Tools/autotest/sim_vehicle.py -v ArduCopter -f quad --console
+```
+
+---
+
+## Project Structure
+
+```
+swarm_sitl/
+├── kml/                    # Place your QGC-exported .kml files here
+├── missions/               # Generated waypoint files (.txt) go here
+└── scripts/
+    ├── kml_to_wpl.py       # Converts QGC KML to a QGC .plan file
+    ├── launch_sitl.sh      # Launches all 4 SITL instances (via xterm)
+    ├── swarm_launch.py     # Uploads mission, arms/takes off followers, starts swarm
+    └── swarm_follow.py     # MAVLink follower relay loop
+```
+
+---
+
+## Execution
+
+### Step 1 — Convert KML to Waypoints
+
+Export your mission from QGC Plan view as a `.kml` file, place it in `kml/`, then run:
+
+```bash
+cd swarm_sitl/scripts
+python3 kml_to_wpl.py
+```
+
+The script auto-detects the `.kml` file in `kml/` and writes a `.plan` file to `missions/`.
+You can also pass paths explicitly:
+
+```bash
+python3 kml_to_wpl.py ../kml/MyMission.kml ../missions/MyMission.plan [altitude_override_m]
+```
+
+---
+
+### Step 2 — Launch 4 SITL Instances
+
+```bash
+bash scripts/launch_sitl.sh
+```
+
+This opens 4 separate `xterm` windows (one per drone), equivalent to running each instance manually in its own terminal. Each window runs independently so the instances don't conflict.
+
+```
+Drone 1 (Leader)    → ports 14550 / 14551
+Drone 2 (Follower)  → ports 14560 / 14561
+Drone 3 (Follower)  → ports 14570 / 14571
+Drone 4 (Follower)  → ports 14580 / 14581
+```
+
+> Requires an active desktop session (`DISPLAY` must be set).
+
+Wait ~30 seconds for all instances to initialise before continuing.
+**Hard FallBAck**
 ```bash
 # Run each instance in a separate terminal (from the home directory).
 # Instance 1
@@ -43,31 +133,48 @@ sim_vehicle.py -v ArduCopter --sysid 3 -I 2 --out udp:127.0.0.1:14570 --out udp:
 sim_vehicle.py -v ArduCopter --sysid 4 -I 3 --out udp:127.0.0.1:14580 --out udp:127.0.0.1:14581
 ```
 
-**Step 2: Convert KML to WPL**
+---
+
+### Step 3 — Launch Swarm
+
 ```bash
-#💡 Place your .kml file inside swarm_sitl/kml/ before running the script.
-# The generated .txt waypoint file will be stored in swarm_sitl/missions/.
-cd swarm_sitl/scripts
-python3 kml_to_wpl.py
+python3 scripts/swarm_launch.py
 ```
 
-**Step 3: Upload Mission to Leader Drone**
-- Open QGroundControl
-- Go to the Plan view and upload the generated .txt waypoint file to Vehicle 1 (Leader)
-- Take off Vehicles 2, 3, and 4 — this ensures they are in GUIDED mode and ready to follow
+This script handles everything automatically:
+1. **Uploads** `missions/Aerophile.plan` to Drone 1 via MAVLink
+2. **Connects** to follower Drones 2, 3, 4
+3. Sets each follower to **GUIDED** mode, **arms** it, and sends a **TAKEOFF** command
+4. Waits for all three to reach altitude
+5. Launches `swarm_follow.py` (the follower relay loop)
 
-**Step 4: Run the Swarm Script**
+To use a different plan file:
 ```bash
-# Run the following command in the swarm_sitl/scripts directory.
-python3 swarm_follow.py
-# Then, in QGC, take off and start the mission for Vehicle 1.
-# The follower drones will automatically track and follow the leader.
+python3 scripts/swarm_launch.py missions/MyOtherMission.plan
 ```
 
-## 🎯 Outcome
-Add Photos and Videos here.......
+---
+
+### Step 3 is fully autonomous — no further action needed.
+
+`swarm_launch.py` arms and takes off the followers first, then sets Drone 1 to **AUTO** mode and arms it so the mission starts automatically. QGC can be used to monitor progress.
+
+---
+
+## Port Reference
+
+| Drone | SYSID | QGC / MAVProxy port | Script port |
+|-------|-------|----------------------|-------------|
+| 1 (Leader)   | 1 | 14550 | 14551 |
+| 2 (Follower) | 2 | 14560 | 14561 |
+| 3 (Follower) | 3 | 14570 | 14571 |
+| 4 (Follower) | 4 | 14580 | 14581 |
+
+---
 
 ## Future Improvements
-- Build a bash script that automates the entire Execution Process
-- Add feature to change default sethome location of QGC
-- Integrate with ROS 2 for advanced swarm autonomy.
+
+- Automate mission upload to Drone 1 via MAVLink (skip QGC for upload)
+- Add configurable formation offsets via CLI arguments
+- Change default SITL home location
+- Integrate with ROS 2 for advanced swarm autonomy
