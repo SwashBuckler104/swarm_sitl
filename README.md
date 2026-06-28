@@ -22,8 +22,32 @@ Integrates with QGroundControl (QGC) for mission planning and visualization.
 - Python 3.8+
 - ArduPilot SITL
 - QGroundControl (QGC)
-- PyMAVLink (`pip install pymavlink`)
-- lxml (`pip install lxml`)
+- PyMAVLink
+- lxml
+
+---
+
+## Python Environment Setup
+
+Run these commands once from the project root before using any scripts:
+
+```bash
+# Create a virtual environment
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate
+
+# Install all Python dependencies
+pip install -r requirements.txt
+```
+
+> Activate the venv (`source .venv/bin/activate`) in every new terminal before running the scripts.
+
+To deactivate when done:
+```bash
+deactivate
+```
 
 ---
 

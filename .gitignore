@@ -3,3 +3,4 @@
 *.vc.db
 *.vc.db-shm
 *.vc.db-wal
+.venv/
