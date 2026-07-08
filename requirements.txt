@@ -1,2 +1,4 @@
 pymavlink
 lxml
+pexpect
+empy==3.3.4
