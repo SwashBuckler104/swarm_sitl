@@ -13,6 +13,7 @@ Integrates with QGroundControl (QGC) for mission planning and visualization.
 - QGroundControl integration for mission planning and upload
 - PyMAVLink-based swarm coordination
 - Automated mission upload, follower arming, takeoff, and swarm launch
+- Runs on a desktop (xterm windows) or fully headless (detached screen sessions)
 - Fully local simulation — no real drones required
 
 ---
@@ -24,6 +25,7 @@ Integrates with QGroundControl (QGC) for mission planning and visualization.
 - QGroundControl (QGC)
 - PyMAVLink
 - lxml
+- `xterm` (desktop launch) or `screen` (headless launch) — `launch_sitl.sh` uses whichever fits the environment
 
 ---
 
@@ -96,7 +98,8 @@ swarm_sitl/
 ├── missions/               # Generated waypoint files (.txt) go here
 └── scripts/
     ├── kml_to_wpl.py       # Converts QGC KML to a QGC .plan file
-    ├── launch_sitl.sh      # Launches all 4 SITL instances (via xterm)
+    ├── launch_sitl.sh      # Launches all 4 SITL instances (xterm or headless screen)
+    ├── stop_sitl.sh        # Stops all SITL instances and screen sessions
     ├── swarm_launch.py     # Uploads mission, arms/takes off followers, starts swarm
     └── swarm_follow.py     # MAVLink follower relay loop
 ```
@@ -129,7 +132,20 @@ python3 kml_to_wpl.py ../kml/MyMission.kml ../missions/MyMission.plan [altitude_
 bash scripts/launch_sitl.sh
 ```
 
-This opens 4 separate `xterm` windows (one per drone), equivalent to running each instance manually in its own terminal. Each window runs independently so the instances don't conflict.
+The script picks the right mode automatically:
+
+- **Desktop** (`DISPLAY` set + `xterm` installed) — opens 4 separate `xterm` windows, one per drone, equivalent to running each instance manually in its own terminal.
+- **Headless** (SSH session, container, CI — no display) — starts 4 detached `screen` sessions instead:
+
+  ```bash
+  screen -ls              # list sessions: drone1..drone4
+  screen -r drone1        # attach to a drone's console (detach: Ctrl-A, D)
+  tail -f /tmp/drone2.log # or just follow its log
+  ```
+
+  In headless mode each drone also streams to `udp:$GCS_ADDR:14550` so a ground station outside the machine/session can see all 4 vehicles — set `GCS_ADDR` to wherever your QGC runs before launching (default: `host.docker.internal`).
+
+In both modes:
 
 ```
 Drone 1 (Leader)    → ports 14550 / 14551
@@ -138,10 +154,19 @@ Drone 3 (Follower)  → ports 14570 / 14571
 Drone 4 (Follower)  → ports 14580 / 14581
 ```
 
-> Requires an active desktop session (`DISPLAY` must be set).
+If a prebuilt SITL binary exists (`~/ardupilot/build/sitl/bin/arducopter`) the script passes `--no-rebuild` and starts instantly; otherwise it runs `waf configure` once up front (launching 4 instances that each configure simultaneously corrupts the build).
 
 Wait ~30 seconds for all instances to initialise before continuing.
-**Hard FallBAck**
+
+**Stop everything:**
+
+```bash
+bash scripts/stop_sitl.sh
+```
+
+This quits all drone screen sessions and kills every `arducopter`, `sim_vehicle.py`, and MAVProxy process.
+
+**Manual fallback**
 ```bash
 # Run each instance in a separate terminal (from the home directory).
 # Instance 1
